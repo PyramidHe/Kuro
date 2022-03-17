@@ -192,7 +192,7 @@ def train_sample(sample, detailed_summary=False):
     #vec = sample["vec"]
     #imgs= sample_cuda["imgs"]
     #vector_est = model(sample_cuda["imgs"], sample_cuda["proj_mats"], sample_cuda["point"])
-    scalar_est = model(sample["imgs"], sample["proj_mats"], sample["point"], sample["point"])
+    scalar_est = model(sample["imgs"], sample["proj_mats"], sample["point"], sample["vec"])
     #print("confidence: ", confidence)
     loss = model_loss(scalar_est, scalar)
     loss.backward()
