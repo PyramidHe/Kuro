@@ -51,6 +51,7 @@ class PVDataset(Dataset):
             imgs_array.append(sorted(glob.glob(os.path.join(sample_img_folder, "*.png"))))
             points, vecs, scalar, nocam = read_pv_file(gt, num=self.num_imgs, mode="Train")
             points = np.concatenate([points, np.ones((points.shape[0], 1), dtype=np.float32)], axis=1)
+            vecs = np.concatenate([vecs, np.zeros((vecs.shape[0], 1), dtype=np.float32)], axis=1)
             e_index = s_index + points.shape[0] - 1
             se_index_per_sample.append((s_index, e_index))
             s_index = e_index + 1
@@ -83,7 +84,7 @@ class PVDataset(Dataset):
                 relative_idx = idx-se_index[0]
                 break
         point = np.expand_dims(points_array[sample_num][relative_idx], axis=1)
-        vec = vecs_array[sample_num][relative_idx]
+        vec = np.expand_dims(vecs_array[sample_num][relative_idx], axis=1)
         scalar = scalar_array[sample_num][relative_idx]
         nocam = nocam_array[sample_num][relative_idx]
         imgs = []
