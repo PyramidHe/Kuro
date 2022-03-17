@@ -62,7 +62,7 @@ parser.add_argument('--model', default='pvsnet', help='select model')
 parser.add_argument('--dataset', default='dtu_yao', help='select dataset')
 parser.add_argument('--datapath', help='train datapath')
 parser.add_argument('--listfile', help='train list')
-parser.add_argument('--num_imgs', default=4, help='number of images')
+parser.add_argument('--num_imgs', type=int, default=4, help='number of images')
 
 parser.add_argument('--mode', default='train', help='mode')
 parser.add_argument('--gpu', action='store_true', help='enable cuda')
