@@ -208,7 +208,7 @@ def test_sample(sample, detailed_summary=True):
     if args.gpu:
         sample = tocuda(sample)
     scalar = sample["scalar"]
-    scalar_est = model(sample["imgs"], sample["proj_mats"], sample["point"], sample["point"])
+    scalar_est = model(sample["imgs"], sample["proj_mats"], sample["point"], sample["vec"])
     loss = model_loss(scalar_est, scalar)
     scalar_outputs = {"loss": loss}
     return tensor2float(loss), tensor2float(scalar_outputs)
