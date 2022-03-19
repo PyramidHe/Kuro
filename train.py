@@ -188,11 +188,12 @@ def train():
                                                                                     time.time() - start_time))
             ppoint = np.squeeze(tensor2numpy(sample["point"])) + np.squeeze(tensor2numpy(sample["vec"])) * np.expand_dims(scalar_est, axis=1)
             ppoint = np.squeeze(ppoint)
-            for i in range(args.batch_size):
+            idx = tensor2numpy(sample["idx"])
+            for i in range(idx.shape[0]):
                 try:
-                    models_dict[int(sample["idx"][i].detach())].append(ppoint[i, :3])
+                    models_dict[int(idx[i])].append(ppoint[i, :3])
                 except KeyError:
-                    models_dict[int(sample["idx"][i].detach())] = [ppoint[i, :3]]
+                    models_dict[int(idx[i])] = [ppoint[i, :3]]
         for key in models_dict:
             pc = o3d.geometry.PointCloud()
             pc.points = o3d.utility.Vector3dVector(models_dict[key])
