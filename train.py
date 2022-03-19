@@ -1,5 +1,6 @@
 import argparse
 import torch.nn.parallel
+import open3d as o3d
 import torch.backends.cudnn as cudnn
 import torch.optim as optim
 from torch.utils.data import DataLoader
@@ -102,13 +103,15 @@ if args.mode == "train":
     logger = SummaryWriter(args.logdir)
 
 print("argv:", sys.argv[1:])
-#print_args(args)
-
+dbm_folder = os.path.join(args.logdir, 'models')
+if not os.path.exists(dbm_folder):
+    os.makedirs(dbm_folder)
+model_folder = os.path.join(args.logdir, dbm_folder)
 # dataset, dataloader
 train_dataset = PVDataset(args.datapath, args.listfile, args.num_imgs)
 test_dataset = PVDataset(args.datapath, args.listfile, args.num_imgs, "test")
 TrainImgLoader = DataLoader(train_dataset, args.batch_size, shuffle=True, num_workers=8, drop_last=True)
-TestImgLoader = DataLoader(test_dataset, args.batch_size, shuffle=True, num_workers=4, drop_last=False)
+TestImgLoader = DataLoader(test_dataset, args.batch_size, shuffle=False, num_workers=4, drop_last=False)
 
 # model, optimizer
 model = PVNet()
@@ -145,23 +148,24 @@ def train():
     lr_gamma = 1 / float(args.lrepochs.split(':')[1])
     lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones, gamma=lr_gamma,
                                                         last_epoch=start_epoch - 1)
-
+    mean_losses = np.zeros(args.epochs)
     for epoch_idx in range(start_epoch, args.epochs):
         print('Epoch {}:'.format(epoch_idx))
         lr_scheduler.step()
         global_step = len(TrainImgLoader) * epoch_idx
-
+        mean_loss = 0
         # training
         for batch_idx, sample in enumerate(TrainImgLoader):
             start_time = time.time()
             global_step = len(TrainImgLoader) * epoch_idx + batch_idx
             do_summary = global_step % args.summary_freq == 0
-            loss, scalar_outputs, image_outputs = train_sample(sample, detailed_summary=do_summary)
+            loss, scalar_outputs = train_sample(sample, detailed_summary=do_summary)
             print(
                 'Epoch {}/{}, Iter {}/{}, train loss = {:.3f}, time = {:.3f}'.format(epoch_idx, args.epochs, batch_idx,
                                                                                      len(TrainImgLoader), loss,
                                                                                      time.time() - start_time))
-
+            mean_loss = (batch_idx * mean_loss + loss)/(batch_idx+1)
+        mean_losses[epoch_idx] = mean_loss
         # checkpoint
         if (epoch_idx + 1) % args.save_freq == 0:
             torch.save({
@@ -172,15 +176,27 @@ def train():
 
         # testing
         # avg_test_scalars = DictAverageMeter()
+        models_dict = {}
         for batch_idx, sample in enumerate(TestImgLoader):
             start_time = time.time()
             global_step = len(TrainImgLoader) * epoch_idx + batch_idx
             do_summary = global_step % args.summary_freq == 0
-            loss, scalar_outputs = test_sample(sample, detailed_summary=do_summary)
+            scalar_est, loss, scalar_outputs = test_sample(sample, detailed_summary=do_summary)
+
             print('Epoch {}/{}, Iter {}/{}, test loss = {:.3f}, time = {:3f}'.format(epoch_idx, args.epochs, batch_idx,
                                                                                     len(TestImgLoader), loss,
                                                                                     time.time() - start_time))
-
+            ppoint = np.squeeze(tensor2numpy(sample["point"])) + np.squeeze(tensor2numpy(sample["vec"])) * np.expand_dims(scalar_est, axis=1)
+            ppoint = np.squeeze(ppoint)
+            for i in range(args.batch_size):
+                try:
+                    models_dict[int(sample["idx"][i].detach())].append(ppoint[i, :3])
+                except KeyError:
+                    models_dict[int(sample["idx"][i].detach())] = [ppoint[i, :3]]
+        for key in models_dict:
+            pc = o3d.geometry.PointCloud()
+            pc.points = o3d.utility.Vector3dVector(models_dict[key])
+            o3d.io.write_point_cloud(os.path.join(dbm_folder, str(key) + "_" + str(epoch_idx) + ".ply"), pc)
 
 
 def train_sample(sample, detailed_summary=False):
@@ -199,7 +215,7 @@ def train_sample(sample, detailed_summary=False):
     optimizer.step()
 
     scalar_outputs = {"loss": loss}
-    return tensor2float(loss), tensor2float(scalar_outputs), scalar_est
+    return tensor2float(loss), tensor2float(scalar_outputs)
 
 
 # @make_nograd_func
@@ -211,7 +227,7 @@ def test_sample(sample, detailed_summary=True):
     scalar_est = model(sample["imgs"], sample["proj_mats"], sample["point"], sample["vec"])
     loss = model_loss(scalar_est, scalar)
     scalar_outputs = {"loss": loss}
-    return tensor2float(loss), tensor2float(scalar_outputs)
+    return tensor2numpy(scalar_est), tensor2float(loss), tensor2float(scalar_outputs)
 #
 #
 # def profile():

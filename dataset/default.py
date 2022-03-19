@@ -97,5 +97,6 @@ class PVDataset(Dataset):
                 "vec": vec,
                 "imgs": imgs,
                 "scalar": scalar,
-                "proj_mats": proj_mats_l
+                "proj_mats": proj_mats_l,
+                 "idx": sample_num
                 }

@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import timm
 from models.layers import ConvBN, Conv3BN, UpConv
 
 # B = batch size
@@ -10,6 +11,7 @@ from models.layers import ConvBN, Conv3BN, UpConv
 # P = patch size
 # N = number of images
 # NP = number of points in the line
+
 
 def pv3d_line_index(proj_matrices, points3d, vecs3d, num):
     """
@@ -36,14 +38,13 @@ def pv3d_line_index(proj_matrices, points3d, vecs3d, num):
     line2d = torch.permute(line2d, (0, 2, 1, 3))
     line2d = line2d / (line2d[:, :, :, 2].unsqueeze(-1))
     line2d = line2d[:, :, :, :2]
-    line2d0 = line2d.long()
-    line2d1 = (line2d / 2).long()
-    line2d2 = (line2d / 4).long()
-    line2d3 = (line2d / 8).long()
-    line2d4 = (line2d / 16).long()
-    line2d5 = (line2d / 32).long()
-    return line2d0, line2d1, line2d2, line2d3, line2d4, line2d5
 
+    line2d0 = (line2d / 2).long()
+    line2d1 = (line2d / 4).long()
+    line2d2 = (line2d / 8).long()
+    line2d3 = (line2d / 16).long()
+    line2d4 = (line2d / 32).long()
+    return line2d0, line2d1, line2d2, line2d3, line2d4
 
 
 def patches2d(in_tensor, f_size=3):
@@ -95,6 +96,7 @@ def line_patches_extraction(patches_tensor, indices):
     patches_ex = torch.stack(patches_ex, dim=0)
     return patches_ex
 
+
 class FeatureNet(nn.Module):
     """Extract features"""
 
@@ -139,29 +141,10 @@ class FeatureNet(nn.Module):
         return x0, x1, x2, x3, x4, x5
 
 
-# class Bottleneck(nn.Module):
-#     """Extract features"""
-#
-#     def __init__(self, channel_dim=380):
-#         super().__init__()
-#
-#         self.b0 = ConvBN(channel_dim, 256)
-#         self.b1 = ConvBN(256, 128)
-#         self.b2 = ConvBN(128, 32)
-#         self.b3 = ConvBN(32, 8)
-#         self.lin = nn.Linear(8, 3)
-#
-#     def forward(self, x):
-#         x = self.b3(self.b2(self.b1(self.b0(x))))
-#         x = torch.mean(torch.flatten(x, -2), -1)
-#         x = self.lin(x)
-#         return x
-
-
 class Bottleneck(nn.Module):
     """Extract features"""
 
-    def __init__(self, num_points, channel_dim=380):
+    def __init__(self, num_points, patch_size, channel_dim=428):
         super().__init__()
 
         self.b0 = Conv3BN(channel_dim, 256)
@@ -169,49 +152,35 @@ class Bottleneck(nn.Module):
         self.b2 = Conv3BN(64, 32)
         self.b3 = Conv3BN(32, 16)
         self.b4 = Conv3BN(16, 1)
-        self.lin = nn.Linear(num_points, 1)
+        self.pc0 = ConvBN(num_points, 8)
+        self.pc1 = ConvBN(8, 4)
+        self.pc2 = ConvBN(4, 1)
+        self.lin = nn.Linear(patch_size*patch_size, 1)
 
     def forward(self, x):
         x = self.b4(self.b3(self.b2(self.b1(self.b0(x)))))
         x = torch.squeeze(x)
-        s0, s1, s2, s3 = x.shape
-        x = x.view(s0, s1, s2*s3)
-        x = torch.mean(x, dim=-1)
+        x = self.pc2(self.pc1(self.pc0(x)))
+        x = torch.squeeze(x)
+        s0, s1, s2 = x.shape
+        x = x.view(s0, s1*s2)
         x = torch.sigmoid(self.lin(x))
         return torch.squeeze(x)
 
 
-class Bottleneck_(nn.Module):
-    """Extract features"""
-
-    def __init__(self, num_points, channel_dim=380):
-        super().__init__()
-
-        self.b0 = ConvBN(channel_dim * num_points, 512)
-        self.b1 = ConvBN(512, 256)
-        self.b2 = ConvBN(256, 64)
-        self.b3 = ConvBN(64, 32)
-        self.b4 = ConvBN(32, 16)
-        self.b5 = ConvBN(16, 1)
-
-
-    def forward(self, x):
-        s0, s1, s2, s3, s4 = x.shape
-        x = x.reshape(s0, s1*s2, s3, s4)
-        x = self.b5(self.b4(self.b3(self.b2(self.b1(self.b0(x))))))
-        x = torch.squeeze(x)
-        x = torch.mean(x, dim=[-1, -2])
-        x = torch.sigmoid(x)
-        return x
-
-
 class PVNet(nn.Module):
     # TODO: if possible reduce memory footprint (remove upsampling layer?), images must be multiples of 32 (pad?)
-    def __init__(self, num_points=16, mode="Train"):
+    def __init__(self, num_points=16, patch_size=5, mode="Train"):
         super().__init__()
-        self.feat_net = FeatureNet()
-        self.bottleneck = Bottleneck_(num_points)
         self.num_points = num_points
+        self.patch_size = patch_size
+        self.feat_net = timm.create_model('rexnet_100', features_only=True, pretrained=True)
+        # freeze the weights on feature extractor
+        for param in self.feat_net.parameters():
+            param.requires_grad = False
+
+        self.bottleneck = Bottleneck(self.num_points, self.patch_size)
+
         if mode not in ["Train", "Inference"]:
             raise ValueError("mode must \"Train\" or \"Inference\", different values are not accepted")
         self.mode = mode
@@ -228,7 +197,6 @@ class PVNet(nn.Module):
         features_2 = []
         features_3 = []
         features_4 = []
-        features_5 = []
         f_downsize = 32
         width = images[0].shape[-1]
         height = images[0].shape[-2]
@@ -238,27 +206,24 @@ class PVNet(nn.Module):
             # TO DO remove hardcoded pad
 
             image = F.pad(image, (0, wpad, 0, hpad), "constant", 0)
-
-            f0, f1, f2, f3, f4, f5 = self.feat_net(image)
+            f0, f1, f2, f3, f4 = self.feat_net(image)
             features_0.append(f0)
             features_1.append(f1)
             features_2.append(f2)
             features_3.append(f3)
             features_4.append(f4)
-            features_5.append(f5)
 
-        line2d0, line2d1, line2d2, line2d3, line2d4, line2d5 = pv3d_line_index(proj_matrices, points3d, vecs3d,
+        line2d0, line2d1, line2d2, line2d3, line2d4 = pv3d_line_index(proj_matrices, points3d, vecs3d,
                                                                               self.num_points)
         # TODO remove variance: in this case it doesn't make sense
-        features_0 = torch.var(line_patches_extraction(patches2d(torch.stack(features_0, dim=1), f_size=5), line2d0), dim=2)
-        features_1 = torch.var(line_patches_extraction(patches2d(torch.stack(features_1, dim=1), f_size=5), line2d1), dim=2)
-        features_2 = torch.var(line_patches_extraction(patches2d(torch.stack(features_2, dim=1), f_size=5), line2d2), dim=2)
-        features_3 = torch.var(line_patches_extraction(patches2d(torch.stack(features_3, dim=1), f_size=5), line2d3), dim=2)
-        features_4 = torch.var(line_patches_extraction(patches2d(torch.stack(features_4, dim=1), f_size=5), line2d4), dim=2)
-        features_5 = torch.var(line_patches_extraction(patches2d(torch.stack(features_5, dim=1), f_size=5), line2d5), dim=2)
+        features_0 = torch.var(line_patches_extraction(patches2d(torch.stack(features_0, dim=1), f_size=self.patch_size), line2d0), dim=2)
+        features_1 = torch.var(line_patches_extraction(patches2d(torch.stack(features_1, dim=1), f_size=self.patch_size), line2d1), dim=2)
+        features_2 = torch.var(line_patches_extraction(patches2d(torch.stack(features_2, dim=1), f_size=self.patch_size), line2d2), dim=2)
+        features_3 = torch.var(line_patches_extraction(patches2d(torch.stack(features_3, dim=1), f_size=self.patch_size), line2d3), dim=2)
+        features_4 = torch.var(line_patches_extraction(patches2d(torch.stack(features_4, dim=1), f_size=self.patch_size), line2d4), dim=2)
 
-        fused_feature = torch.cat([features_0, features_1, features_2, features_3, features_4, features_5],
-                                  dim=2)  # SIZE(NP, B, C=4+16+32+64+128+256=500# , P, P)
+        fused_feature = torch.cat([features_0, features_1, features_2, features_3, features_4],
+                                  dim=2)  # SIZE(NP, B, C=16+38+61+128+185=428 , P, P)
         fused_feature = fused_feature.permute(1, 2, 0, 3, 4)
         vector = self.bottleneck(fused_feature)
         # TODO change confidence metric

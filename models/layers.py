@@ -24,7 +24,7 @@ class Conv3BN(nn.Module):
         self.conv3_bn = nn.Sequential(
             nn.Conv3d(in_channels, out_channels, kernel_size=3, stride=stride, padding=1),
             nn.BatchNorm3d(out_channels),
-            nn.ReLU(inplace=True)
+            nn.Mish(inplace=True)
         )
 
     def forward(self, x):
