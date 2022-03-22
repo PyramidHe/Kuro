@@ -86,6 +86,9 @@ class PVDataset(Dataset):
         point = np.expand_dims(points_array[sample_num][relative_idx], axis=1)
         vec = np.expand_dims(vecs_array[sample_num][relative_idx], axis=1)
         scalar = scalar_array[sample_num][relative_idx]
+        confidence = 0.0
+        if scalar > confidence:
+            confidence = 1.0
         nocam = nocam_array[sample_num][relative_idx]
         imgs = []
         proj_mats_l = []
@@ -97,6 +100,7 @@ class PVDataset(Dataset):
                 "vec": vec,
                 "imgs": imgs,
                 "scalar": scalar,
+                "intersect": confidence,
                 "proj_mats": proj_mats_l,
                  "idx": sample_num
                 }

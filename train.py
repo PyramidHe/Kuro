@@ -2,6 +2,7 @@ import argparse
 import time
 import sys
 import datetime
+import os
 import torch.nn.parallel
 import torch.backends.cudnn as cudnn
 import torch.optim as optim
@@ -108,7 +109,8 @@ TestImgLoader = DataLoader(test_dataset, args.batch_size, shuffle=False, num_wor
 model = PVNet()
 if args.gpu:
     model.cuda()
-model_loss = torch.nn.MSELoss()
+mse_loss = torch.nn.MSELoss()
+bce_loss = torch.nn.BCELoss()
 optimizer = optim.Adam(model.parameters(), lr=args.lr, betas=(0.9, 0.999), weight_decay=args.wd)
 
 # load parameters
@@ -203,8 +205,8 @@ def train_sample(sample):
     if args.gpu:
         sample = tocuda(sample)
     scalar = sample["scalar"]
-    scalar_est = model(sample["imgs"], sample["proj_mats"], sample["point"], sample["vec"])
-    loss = model_loss(scalar_est, scalar)
+    scalar_est, confidence_est = model(sample["imgs"], sample["proj_mats"], sample["point"], sample["vec"])
+    loss = mse_loss(scalar_est, scalar) * sample["confidence"] + 0.25 * bce_loss(confidence_est, sample["confidence"])
     loss.backward()
     optimizer.step()
     return tensor2float(loss)
@@ -216,8 +218,8 @@ def test_sample(sample):
     if args.gpu:
         sample = tocuda(sample)
     scalar = sample["scalar"]
-    scalar_est = model(sample["imgs"], sample["proj_mats"], sample["point"], sample["vec"])
-    loss = model_loss(scalar_est, scalar)
+    scalar_est, confidence_est = model(sample["imgs"], sample["proj_mats"], sample["point"], sample["vec"])
+    loss = mse_loss(scalar_est, scalar) * sample["confidence"] + 0.25 * bce_loss(confidence_est, sample["confidence"])
     scalar_outputs = {"loss": loss}
     return tensor2numpy(scalar_est), tensor2float(loss)
 
