@@ -1,16 +1,16 @@
 import argparse
+import time
+import sys
+import datetime
 import torch.nn.parallel
-import open3d as o3d
 import torch.backends.cudnn as cudnn
 import torch.optim as optim
 from torch.utils.data import DataLoader
-import time
-from tensorboardX import SummaryWriter
-from dataset.default import PVDataset
-from models.pdvnet import *
-import sys
-import datetime
+import open3d as o3d
 import numpy as np
+from models.pdvnet import *
+from dataset.default import PVDataset
+
 
 
 def make_recursive_func(func):
@@ -58,14 +58,12 @@ def tocuda(vars):
 
 cudnn.benchmark = True
 
-parser = argparse.ArgumentParser(description='To be filled')
+parser = argparse.ArgumentParser(description='Training script')
 parser.add_argument('--model', default='pvsnet', help='select model')
-parser.add_argument('--dataset', default='dtu_yao', help='select dataset')
 parser.add_argument('--datapath', help='train datapath')
 parser.add_argument('--listfile', help='train list')
 parser.add_argument('--num_imgs', type=int, default=4, help='number of images')
 
-parser.add_argument('--mode', default='train', help='mode')
 parser.add_argument('--gpu', action='store_true', help='enable cuda')
 parser.add_argument('--epochs', type=int, default=16, help='number of epochs to train')
 parser.add_argument('--lr', type=float, default=0.0001, help='learning rate')
@@ -78,7 +76,6 @@ parser.add_argument('--loadckpt', default=None, help='load a specific checkpoint
 parser.add_argument('--logdir', default='./checkpoints/debug', help='the directory to save checkpoints/logs')
 parser.add_argument('--resume', action='store_true', help='continue to train the model')
 
-parser.add_argument('--summary_freq', type=int, default=1, help='print and summary frequency')
 parser.add_argument('--save_freq', type=int, default=1, help='save checkpoint frequency')
 parser.add_argument('--seed', type=int, default=1, metavar='S', help='random seed')
 
@@ -92,16 +89,10 @@ torch.manual_seed(args.seed)
 torch.cuda.manual_seed(args.seed)
 
 # create logger for mode "train" and "testall"
-if args.mode == "train":
-    if not os.path.isdir(args.logdir):
-        os.mkdir(args.logdir)
+if not os.path.isdir(args.logdir):
+    os.mkdir(args.logdir)
 
-    current_time_str = str(datetime.datetime.now().strftime('%Y%m%d_%H%M%S'))
-    print("current time", current_time_str)
-
-    print("creating new summary file")
-    logger = SummaryWriter(args.logdir)
-
+current_time_str = str(datetime.datetime.now().strftime('%Y%m%d_%H%M%S'))
 print("argv:", sys.argv[1:])
 dbm_folder = os.path.join(args.logdir, 'models')
 if not os.path.exists(dbm_folder):
@@ -147,25 +138,27 @@ def train():
     milestones = [int(epoch_idx) for epoch_idx in args.lrepochs.split(':')[0].split(',')]
     lr_gamma = 1 / float(args.lrepochs.split(':')[1])
     lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones, gamma=lr_gamma,
-                                                        last_epoch=start_epoch - 1)
-    mean_losses = np.zeros(args.epochs)
+                                                      last_epoch=start_epoch - 1)
+
     for epoch_idx in range(start_epoch, args.epochs):
         print('Epoch {}:'.format(epoch_idx))
         lr_scheduler.step()
-        global_step = len(TrainImgLoader) * epoch_idx
-        mean_loss = 0
+        train_mean_loss = 0
+        test_mean_loss = 0
+        t_ep = args.epochs - 1
         # training
         for batch_idx, sample in enumerate(TrainImgLoader):
             start_time = time.time()
-            global_step = len(TrainImgLoader) * epoch_idx + batch_idx
-            do_summary = global_step % args.summary_freq == 0
-            loss, scalar_outputs = train_sample(sample, detailed_summary=do_summary)
+            loss = train_sample(sample)
             print(
-                'Epoch {}/{}, Iter {}/{}, train loss = {:.3f}, time = {:.3f}'.format(epoch_idx, args.epochs, batch_idx,
+                'Epoch {}/{}, Iter {}/{}, train loss = {:.3f}, time = {:.3f}'.format(epoch_idx, t_ep, batch_idx,
                                                                                      len(TrainImgLoader), loss,
                                                                                      time.time() - start_time))
-            mean_loss = (batch_idx * mean_loss + loss)/(batch_idx+1)
-        mean_losses[epoch_idx] = mean_loss
+            train_mean_loss = (batch_idx * train_mean_loss + loss)/(batch_idx+1)
+
+        with open(os.path.join(args.logdir, current_time_str + '_train'), 'a') as file:
+            file.write('Epoch {}/{} mean train loss = {:.3f}\n'.format(epoch_idx, t_ep, train_mean_loss))
+
         # checkpoint
         if (epoch_idx + 1) % args.save_freq == 0:
             torch.save({
@@ -180,12 +173,12 @@ def train():
         for batch_idx, sample in enumerate(TestImgLoader):
             start_time = time.time()
             global_step = len(TrainImgLoader) * epoch_idx + batch_idx
-            do_summary = global_step % args.summary_freq == 0
-            scalar_est, loss, scalar_outputs = test_sample(sample, detailed_summary=do_summary)
+            scalar_est, loss = test_sample(sample)
 
-            print('Epoch {}/{}, Iter {}/{}, test loss = {:.3f}, time = {:3f}'.format(epoch_idx, args.epochs, batch_idx,
+            print('Epoch {}/{}, Iter {}/{}, test loss = {:.3f}, time = {:3f}'.format(epoch_idx, t_ep, batch_idx,
                                                                                     len(TestImgLoader), loss,
                                                                                     time.time() - start_time))
+            test_mean_loss = (batch_idx * test_mean_loss + loss) / (batch_idx + 1)
             ppoint = np.squeeze(tensor2numpy(sample["point"])) + np.squeeze(tensor2numpy(sample["vec"])) * np.expand_dims(scalar_est, axis=1)
             ppoint = np.squeeze(ppoint)
             idx = tensor2numpy(sample["idx"])
@@ -194,33 +187,31 @@ def train():
                     models_dict[int(idx[i])].append(ppoint[i, :3])
                 except KeyError:
                     models_dict[int(idx[i])] = [ppoint[i, :3]]
+
+        with open(os.path.join(args.logdir, current_time_str + '_test'), 'a') as file:
+            file.write('Epoch {}/{} mean test loss = {:.3f}\n'.format(epoch_idx, t_ep, test_mean_loss))
+
         for key in models_dict:
             pc = o3d.geometry.PointCloud()
             pc.points = o3d.utility.Vector3dVector(models_dict[key])
             o3d.io.write_point_cloud(os.path.join(dbm_folder, str(key) + "_" + str(epoch_idx) + ".ply"), pc)
 
 
-def train_sample(sample, detailed_summary=False):
+def train_sample(sample):
     model.train()
     optimizer.zero_grad()
     if args.gpu:
         sample = tocuda(sample)
     scalar = sample["scalar"]
-    #vec = sample["vec"]
-    #imgs= sample_cuda["imgs"]
-    #vector_est = model(sample_cuda["imgs"], sample_cuda["proj_mats"], sample_cuda["point"])
     scalar_est = model(sample["imgs"], sample["proj_mats"], sample["point"], sample["vec"])
-    #print("confidence: ", confidence)
     loss = model_loss(scalar_est, scalar)
     loss.backward()
     optimizer.step()
-
-    scalar_outputs = {"loss": loss}
-    return tensor2float(loss), tensor2float(scalar_outputs)
+    return tensor2float(loss)
 
 
 # @make_nograd_func
-def test_sample(sample, detailed_summary=True):
+def test_sample(sample):
     model.eval()
     if args.gpu:
         sample = tocuda(sample)
@@ -228,38 +219,7 @@ def test_sample(sample, detailed_summary=True):
     scalar_est = model(sample["imgs"], sample["proj_mats"], sample["point"], sample["vec"])
     loss = model_loss(scalar_est, scalar)
     scalar_outputs = {"loss": loss}
-    return tensor2numpy(scalar_est), tensor2float(loss), tensor2float(scalar_outputs)
-#
-#
-# def profile():
-#     warmup_iter = 5
-#     iter_dataloader = iter(TestImgLoader)
-#
-#     @make_nograd_func
-#     def do_iteration():
-#         torch.cuda.synchronize()
-#         torch.cuda.synchronize()
-#         start_time = time.perf_counter()
-#         test_sample(next(iter_dataloader), detailed_summary=True)
-#         torch.cuda.synchronize()
-#         end_time = time.perf_counter()
-#         return end_time - start_time
-#
-#     for i in range(warmup_iter):
-#         t = do_iteration()
-#         print('WarpUp Iter {}, time = {:.4f}'.format(i, t))
-#
-#     with torch.autograd.profiler.profile(enabled=True, use_cuda=True) as prof:
-#         for i in range(5):
-#             t = do_iteration()
-#             print('Profile Iter {}, time = {:.4f}'.format(i, t))
-#             time.sleep(0.02)
-#
-#     if prof is not None:
-#         # print(prof)
-#         trace_fn = 'chrome-trace.bin'
-#         prof.export_chrome_trace(trace_fn)
-#         print("chrome trace file is written to: ", trace_fn)
+    return tensor2numpy(scalar_est), tensor2float(loss)
 
 
 if __name__ == '__main__':
