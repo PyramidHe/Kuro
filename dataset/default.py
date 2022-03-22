@@ -46,7 +46,7 @@ class PVDataset(Dataset):
             proj_mats.append(extrinsics[:3, :4])
 
         for sample in train_list:
-            gt = os.path.join(gt_folder, sample + ".txt")
+            gt = os.path.join(gt_folder, sample + ".npz")
             sample_img_folder = os.path.join(img_folder, sample)
             imgs_array.append(sorted(glob.glob(os.path.join(sample_img_folder, "*.png"))))
             points, vecs, scalar, nocam = read_pv_file(gt, num=self.num_imgs, mode="Train")
