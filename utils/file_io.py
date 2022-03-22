@@ -80,30 +80,26 @@ def read_points_file(points_file, mode="Train", norm_split=False):
 
 def read_pv_file(pv_file, num=4, mode="Train"):
     assert mode in ["Train", "Inference"]
-    with open(pv_file, 'r') as f:
-        line = f.readline()
-        points = []
-        vecs = []
-        scalar = []
-        num_cameras = len(line.split()[6:])
-        nocam = []
+    data = np.load(pv_file)['arr_0']
 
-        while line:
-            split = line.split()
-            points.append([float(item) for item in split[:3]])
-            vecs.append([float(item) for item in split[3:6]])
-            if mode == "Train":
-                scalar.append(float(split[6]))
+    scalar = []
+    points = []
+    vecs = []
+    scalar = []
+    num_cameras = len(data[0][7:])
+    nocam = []
 
-            scores = np.array([float(item) for item in split[7:]])
-            ind = np.argpartition(scores, -num)[-num:]
-            nocam.append(ind)
-            line = f.readline()
+    for sample in data:
+        points.append(sample[:3])
+        vecs.append(sample[3:6])
+        scalar.append(float(sample[6]))
+        scores = sample[7:]
+        ind = np.argpartition(scores, -num)[-num:]
+        nocam.append(ind)
 
-    points = np.array(points, dtype=np.float32)
-    vecs = np.array(vecs, dtype=np.float32)
-    scalar = np.array(scalar, dtype=np.float32)
-    f.close()
+    points = np.stack(points, axis=0).astype(np.float32)
+    vecs = np.stack(vecs, axis=0).astype(np.float32)
+    scalar = np.array(scalar).astype(np.float32)
     if mode == "Train":
         return points, vecs, scalar, nocam
     return points, vecs, nocam
