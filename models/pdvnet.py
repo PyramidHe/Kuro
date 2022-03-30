@@ -121,7 +121,7 @@ class Bottleneck(nn.Module):
         s0, s1, s2 = x.shape
         x = x.view(s0, s1*s2)
         x = torch.sigmoid(self.lin(x))
-        return torch.squeeze(x[:, 0]), torch.squeeze(x[:, 1])
+        return x
 
 
 class PVNet(nn.Module):
@@ -179,7 +179,7 @@ class PVNet(nn.Module):
         fused_feature = torch.cat([features_0, features_1, features_2, features_3, features_4],
                                   dim=2)  # SIZE(NP, B, C=16+38+61+128+185=428 , P, P)
         fused_feature = fused_feature.permute(1, 2, 0, 3, 4)
-        vector, confidence = self.bottleneck(fused_feature)
-        return vector, confidence
+        scalars = self.bottleneck(fused_feature)
+        return scalars
 
 

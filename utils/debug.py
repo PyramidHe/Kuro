@@ -1,6 +1,6 @@
 import open3d as o3d
 import numpy as np
-
+from file_io import read_pv_file
 
 def visualize_binary(pcl, mask):
     points = np.asarray(pcl.points)
@@ -21,3 +21,12 @@ def line_set(start, stop):
         line_set.points = o3d.utility.Vector3dVector(points)
         line_set.lines = o3d.utility.Vector2iVector(lines)
         return line_set
+
+def visualize_hypo(input_file):
+    points, vecs, scalar, nocam = read_pv_file(input_file)
+    end = points + vecs
+    ls = line_set(points, end)
+    return ls
+
+# if __name__=="__main__":
+#     o3d.visualization.draw_geometries([visualize_hypo("/home/flexsight/Downloads/dtu/GT__/scan116_train.npz")])

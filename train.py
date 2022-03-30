@@ -57,6 +57,11 @@ def tocuda(vars):
     else:
         raise NotImplementedError("invalid input type {} for tensor2numpy".format(type(vars)))
 
+
+def mse_loss(output, target, confidence):
+    loss = torch.mean(((output - target)**2)*confidence)
+    return loss
+
 cudnn.benchmark = True
 
 parser = argparse.ArgumentParser(description='Training script')
@@ -109,7 +114,7 @@ TestImgLoader = DataLoader(test_dataset, args.batch_size, shuffle=False, num_wor
 model = PVNet()
 if args.gpu:
     model.cuda()
-mse_loss = torch.nn.MSELoss()
+
 bce_loss = torch.nn.BCELoss()
 optimizer = optim.Adam(model.parameters(), lr=args.lr, betas=(0.9, 0.999), weight_decay=args.wd)
 
@@ -148,7 +153,7 @@ def train():
         train_mean_loss = 0
         test_mean_loss = 0
         t_ep = args.epochs - 1
-        # training
+        #training
         for batch_idx, sample in enumerate(TrainImgLoader):
             start_time = time.time()
             loss = train_sample(sample)
@@ -175,7 +180,7 @@ def train():
         for batch_idx, sample in enumerate(TestImgLoader):
             start_time = time.time()
             global_step = len(TrainImgLoader) * epoch_idx + batch_idx
-            scalar_est, loss = test_sample(sample)
+            scalar_est, confidence_est, loss = test_sample(sample)
 
             print('Epoch {}/{}, Iter {}/{}, test loss = {:.3f}, time = {:3f}'.format(epoch_idx, t_ep, batch_idx,
                                                                                     len(TestImgLoader), loss,
@@ -185,10 +190,11 @@ def train():
             ppoint = np.squeeze(ppoint)
             idx = tensor2numpy(sample["idx"])
             for i in range(idx.shape[0]):
-                try:
-                    models_dict[int(idx[i])].append(ppoint[i, :3])
-                except KeyError:
-                    models_dict[int(idx[i])] = [ppoint[i, :3]]
+                if confidence_est[i] > 0.5:
+                    try:
+                        models_dict[int(idx[i])].append(ppoint[i, :3])
+                    except KeyError:
+                        models_dict[int(idx[i])] = [ppoint[i, :3]]
 
         with open(os.path.join(args.logdir, current_time_str + '_test'), 'a') as file:
             file.write('Epoch {}/{} mean test loss = {:.3f}\n'.format(epoch_idx, t_ep, test_mean_loss))
@@ -205,8 +211,8 @@ def train_sample(sample):
     if args.gpu:
         sample = tocuda(sample)
     scalar = sample["scalar"]
-    scalar_est, confidence_est = model(sample["imgs"], sample["proj_mats"], sample["point"], sample["vec"])
-    loss = mse_loss(scalar_est, scalar) * sample["confidence"] + 0.25 * bce_loss(confidence_est, sample["confidence"])
+    scalar_est = model(sample["imgs"], sample["proj_mats"], sample["point"], sample["vec"])
+    loss = mse_loss(scalar_est[:, 0], scalar,  sample["confidence"]) + 0.25 * bce_loss(scalar_est[:, 1], sample["confidence"])
     loss.backward()
     optimizer.step()
     return tensor2float(loss)
@@ -218,10 +224,10 @@ def test_sample(sample):
     if args.gpu:
         sample = tocuda(sample)
     scalar = sample["scalar"]
-    scalar_est, confidence_est = model(sample["imgs"], sample["proj_mats"], sample["point"], sample["vec"])
-    loss = mse_loss(scalar_est, scalar) * sample["confidence"] + 0.25 * bce_loss(confidence_est, sample["confidence"])
+    scalar_est = model(sample["imgs"], sample["proj_mats"], sample["point"], sample["vec"])
+    loss = mse_loss(scalar_est[:, 0], scalar,  sample["confidence"]) + 0.25 * bce_loss(scalar_est[:, 1], sample["confidence"])
     scalar_outputs = {"loss": loss}
-    return tensor2numpy(scalar_est), tensor2float(loss)
+    return tensor2numpy(scalar_est[:, 0]), tensor2numpy(scalar_est[:, 1]), tensor2float(loss)
 
 
 if __name__ == '__main__':
